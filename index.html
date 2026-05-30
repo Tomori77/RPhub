@@ -185,6 +185,16 @@
                         <span class="inline-block w-2 h-2 rounded-full bg-primary-500 memory-extracting"></span>
                     </span>
                 </button>
+                <button @click="currentView = 'tools'; showMobileMenu = false"
+                    :class="['w-full flex items-center rounded-lg transition-all duration-200 font-medium', currentView === 'tools' ? 'bg-primary-50 text-primary-700' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900', isSidebarCollapsed ? 'justify-center px-0 py-3' : 'px-3 py-2']">
+                    <svg class="w-5 h-5" :class="isSidebarCollapsed ? 'mr-0' : 'mr-3'" fill="none" stroke="currentColor"
+                        viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94L14.7 6.3z">
+                        </path>
+                    </svg>
+                    <span v-show="!isSidebarCollapsed" class="whitespace-nowrap overflow-hidden">工具(Beta)</span>
+                </button>
                 <button @click="currentView = 'characters'; showMobileMenu = false"
                     :class="['w-full flex items-center rounded-lg transition-all duration-200 font-medium', currentView === 'characters' ? 'bg-primary-50 text-primary-700' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900', isSidebarCollapsed ? 'justify-center px-0 py-3' : 'px-3 py-2']">
                     <svg class="w-5 h-5" :class="isSidebarCollapsed ? 'mr-0' : 'mr-3'" fill="none" stroke="currentColor"
@@ -405,7 +415,7 @@
                                             d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z">
                                         </path>
                                     </svg>
-                                    {{ chatHistory.filter(m => m.role !== 'system').length }} 消息
+                                    {{ chatRoundStats.turns }} 轮 · {{ chatRoundStats.floors }} 楼
                                 </div>
                                 <div class="text-xs text-gray-400 font-medium flex items-center">
                                     <svg class="w-3 h-3 mr-1 opacity-70" fill="none" stroke="currentColor"
@@ -505,11 +515,11 @@
                     </div>
 
                     <template v-if="currentCharacter && chatHistory.length > 0">
-                    <template v-for="({ msg, index }, displayIndex) in displayedChatMessages" :key="index">
+                    <template v-for="({ msg, index }, displayIndex) in displayedChatMessages" :key="msg.id || index">
                     <div ref="messageElements"
                         :data-role="msg.role"
                         :data-chat-index="index"
-                        v-show="!(msg.role === 'assistant' && index === chatHistory.length - 1 && isThinking && !(msg.reasoning || parseCot(msg.content).cot || parseCot(msg.content).main))"
+                        v-show="!(msg.role === 'assistant' && index === chatHistory.length - 1 && isThinking && !(msg.reasoning || parseCot(msg.content).cot || parseCot(msg.content).main || (msg.toolCalls && msg.toolCalls.length)))"
                         :class="['flex w-full scroll-reveal-container', msg.isSelf ? 'justify-end' : 'justify-start', msg.skipReveal ? 'reveal-active' : (msg.isSelf ? 'scroll-reveal-right' : 'scroll-reveal-left')]"
                         :style="{ transitionDelay: (displayIndex % 5) * 50 + 'ms' }">
                         <div
@@ -592,7 +602,7 @@
                                         <div v-else class="message-content-wrapper"
                                             :class="{'w-full': messageUsesWideLayout(msg)}">
                                             <!-- Native Model Reasoning Part -->
-                                            <div v-if="msg.reasoning && settings.showNativeReasoning !== false" class="native-thinking-wrapper">
+                                            <div v-if="getAssistantReasoningText(msg) && settings.showNativeReasoning !== false" class="native-thinking-wrapper">
                                                 <div class="cot-ui native-thinking-card"
                                                     :class="{ 'is-live': index === chatHistory.length - 1 && isThinking, 'is-open': msg.isReasoningOpen !== false }">
                                                     <button type="button" class="cot-header native-thinking-header"
@@ -612,8 +622,8 @@
                                                             </svg>
                                                             <span class="text-xs font-bold truncate">原生思考</span>
                                                         </div>
-                                                        <span class="native-thinking-meta">
-                                                            {{ (msg.reasoning || '').length }} 字
+                                                        <span class="native-thinking-plain-meta">
+                                                            {{ getAssistantReasoningText(msg).length }} 字
                                                         </span>
                                                         <svg class="w-3.5 h-3.5 ml-2 opacity-60 chevron" fill="none"
                                                             stroke="currentColor" viewBox="0 0 24 24">
@@ -627,20 +637,214 @@
                                                             <div class="cot-content native-thinking-scroll cot-thinking-scroll custom-scrollbar"
                                                                 :style="settings.fontSize ? { fontSize: (settings.fontSize - 1) + 'px' } : {}">
                                                                 <div class="markdown-body"
-                                                                    v-html="renderMarkdown(msg.reasoning, 'assistant', true)">
+                                                                    v-html="renderMarkdown(getAssistantReasoningText(msg), 'assistant', true)">
                                                                 </div>
                                                             </div>
                                                         </div>
                                                     </div>
                                                 </div>
                                             </div>
-                                            <div v-else-if="msg.reasoning && index === chatHistory.length - 1 && isThinking"
+                                            <div v-else-if="getAssistantReasoningText(msg) && index === chatHistory.length - 1 && isThinking"
                                                 class="native-thinking-wrapper">
                                                 <div class="cot-ui native-thinking-card is-live">
                                                     <div class="cot-header native-thinking-header">
                                                         <div class="flex items-center text-primary-600 min-w-0">
                                                             <span class="live-dots mr-2" aria-hidden="true"><i></i><i></i><i></i></span>
                                                             <span class="text-xs font-bold truncate">已响应，正在思考</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <!-- Active Tool Calls -->
+                                            <div v-if="msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length"
+                                                class="native-thinking-wrapper">
+                                                <template v-for="(toolCall, toolIndex) in getVisibleToolCalls(msg.toolCalls)"
+                                                    :key="'active-tool-call-' + (toolCall.id || toolIndex)">
+                                                <div class="cot-ui native-thinking-card"
+                                                    :class="{ 'is-live': isMergedToolCallLive(msg.toolCalls, toolCall), 'is-open': toolCall.isOpen }">
+                                                    <button type="button" class="cot-header native-thinking-header"
+                                                        @click="toolCall.isOpen = !toolCall.isOpen">
+                                                        <div class="flex flex-1 items-center min-w-0"
+                                                            :class="{ 'text-primary-600': isMergedToolCallLive(msg.toolCalls, toolCall), 'text-red-600': isMergedToolCallError(msg.toolCalls, toolCall) }">
+                                                            <span v-if="isMergedToolCallLive(msg.toolCalls, toolCall)" class="live-dots mr-2" aria-hidden="true"><i></i><i></i><i></i></span>
+                                                            <svg v-else class="w-3.5 h-3.5 mr-2 opacity-70" fill="none"
+                                                                stroke="currentColor" viewBox="0 0 24 24">
+                                                                <path stroke-linecap="round" stroke-linejoin="round"
+                                                                    stroke-width="2"
+                                                                    d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94L14.7 6.3z">
+                                                                </path>
+                                                            </svg>
+                                                            <span class="text-xs font-bold truncate">{{ getMergedToolCallTitle(msg.toolCalls, toolCall) }}</span>
+                                                        </div>
+                                                        <span v-if="isMergedToolCallDone(msg.toolCalls, toolCall)"
+                                                            class="native-thinking-meta tool-call-success-badge" aria-label="工具调用成功">
+                                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor"
+                                                                viewBox="0 0 24 24">
+                                                                <path stroke-linecap="round" stroke-linejoin="round"
+                                                                    stroke-width="2.5" d="M5 13l4 4L19 7"></path>
+                                                            </svg>
+                                                        </span>
+                                                        <svg class="w-3.5 h-3.5 ml-2 opacity-60 chevron" fill="none"
+                                                            stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path stroke-linecap="round" stroke-linejoin="round"
+                                                                stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                                        </svg>
+                                                    </button>
+                                                    <div class="cot-body native-thinking-body"
+                                                        :class="{ 'is-open': toolCall.isOpen }">
+                                                        <div class="cot-inner native-thinking-inner">
+                                                            <div class="native-thinking-scroll tool-call-scroll custom-scrollbar">
+                                                                <div class="tool-call-detail">
+                                                                    <div class="tool-call-row">
+                                                                        <span>工具</span>
+                                                                        <strong>{{ getMergedToolCallTitle(msg.toolCalls, toolCall) }}</strong>
+                                                                    </div>
+                                                                    <template v-if="getMergedToolCallCount(msg.toolCalls, toolCall) === 1">
+                                                                        <div class="tool-call-row">
+                                                                            <span>调用</span>
+                                                                            <code>&lt;{{ toolCall.callName || 'tool_memory_add' }}:{{ toolCall.query }}&gt;</code>
+                                                                        </div>
+                                                                        <div class="tool-call-row">
+                                                                            <span>模式</span>
+                                                                            <strong>{{ getToolCallModeText(toolCall) }}</strong>
+                                                                        </div>
+                                                                        <div v-if="toolCall.status === 'receiving'" class="tool-call-muted">
+                                                                            正在编辑世界书...
+                                                                        </div>
+                                                                        <div v-else-if="toolCall.status === 'queued'" class="tool-call-muted">
+                                                                            等待上一个工具完成...
+                                                                        </div>
+                                                                        <div v-else-if="toolCall.status === 'running'" class="tool-call-muted">
+                                                                            正在检索...
+                                                                        </div>
+                                                                        <div v-else-if="toolCall.error" class="tool-call-error">
+                                                                            {{ toolCall.error }}
+                                                                        </div>
+                                                                        <pre v-if="toolCall.resultText && !toolCall.error" class="tool-call-result">{{ toolCall.resultText }}</pre>
+                                                                    </template>
+                                                                    <div v-else class="tool-call-group-list">
+                                                                        <div v-for="(mergedCall, mergedIndex) in getMergedToolCallItems(msg.toolCalls, toolCall)"
+                                                                            :key="'merged-tool-call-' + (mergedCall.id || mergedIndex)"
+                                                                            class="tool-call-group-item">
+                                                                            <div class="tool-call-group-head">
+                                                                                <span class="tool-call-group-index">#{{ mergedIndex + 1 }}</span>
+                                                                                <strong>{{ getToolCallModeText(mergedCall) }}</strong>
+                                                                                <span class="tool-call-group-status"
+                                                                                    :class="'is-' + (mergedCall.status || 'queued')">{{ getToolCallStatusText(mergedCall) }}</span>
+                                                                            </div>
+                                                                            <code>&lt;{{ mergedCall.callName || 'tool_memory_add' }}:{{ mergedCall.query }}&gt;</code>
+                                                                            <div v-if="mergedCall.status === 'receiving'" class="tool-call-muted">
+                                                                                正在编辑世界书...
+                                                                            </div>
+                                                                            <div v-else-if="mergedCall.status === 'queued'" class="tool-call-muted">
+                                                                                等待上一个工具完成...
+                                                                            </div>
+                                                                            <div v-else-if="mergedCall.status === 'running'" class="tool-call-muted">
+                                                                                正在检索...
+                                                                            </div>
+                                                                            <div v-else-if="mergedCall.error" class="tool-call-error">
+                                                                                {{ mergedCall.error }}
+                                                                            </div>
+                                                                            <pre v-if="mergedCall.resultText && !mergedCall.error" class="tool-call-result">{{ mergedCall.resultText }}</pre>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div v-if="getMergedToolCallReasoningText(msg.toolCalls, toolCall)"
+                                                    class="cot-ui native-thinking-card"
+                                                    :class="{ 'is-live': isMergedToolCallReasoningLive(msg.toolCalls, toolCall), 'is-open': isMergedToolCallReasoningOpen(msg.toolCalls, toolCall) }">
+                                                    <button type="button" class="cot-header native-thinking-header"
+                                                        @click="toggleMergedToolCallReasoning(msg.toolCalls, toolCall)">
+                                                        <div v-if="isMergedToolCallReasoningLive(msg.toolCalls, toolCall)"
+                                                            class="flex items-center text-primary-600 min-w-0">
+                                                            <span class="live-dots mr-2" aria-hidden="true"><i></i><i></i><i></i></span>
+                                                            <span class="text-xs font-bold truncate">原生思考中</span>
+                                                        </div>
+                                                        <div v-else class="flex items-center min-w-0">
+                                                            <svg class="w-3.5 h-3.5 mr-2 opacity-70" fill="none"
+                                                                stroke="currentColor" viewBox="0 0 24 24">
+                                                                <path stroke-linecap="round" stroke-linejoin="round"
+                                                                    stroke-width="2"
+                                                                    d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z">
+                                                                </path>
+                                                            </svg>
+                                                            <span class="text-xs font-bold truncate">原生思考</span>
+                                                        </div>
+                                                        <span class="native-thinking-plain-meta">
+                                                            {{ getMergedToolCallReasoningText(msg.toolCalls, toolCall).length }} 字
+                                                        </span>
+                                                        <svg class="w-3.5 h-3.5 ml-2 opacity-60 chevron" fill="none"
+                                                            stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path stroke-linecap="round" stroke-linejoin="round"
+                                                                stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                                        </svg>
+                                                    </button>
+                                                    <div class="cot-body native-thinking-body"
+                                                        :class="{ 'is-open': isMergedToolCallReasoningOpen(msg.toolCalls, toolCall) }">
+                                                        <div class="cot-inner native-thinking-inner">
+                                                            <div class="cot-content native-thinking-scroll cot-thinking-scroll custom-scrollbar"
+                                                                :style="settings.fontSize ? { fontSize: (settings.fontSize - 1) + 'px' } : {}">
+                                                                <div class="markdown-body"
+                                                                    v-html="renderMarkdown(getMergedToolCallReasoningText(msg.toolCalls, toolCall), 'assistant', true)">
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                </template>
+                                            </div>
+                                            <div v-if="msg.role === 'assistant' && activeToolContinuationMessageId === msg.id && (isGenerating || isRemoteGenerating) && !activeToolContinuationHasResponse && !isThinking"
+                                                class="active-tool-waiting">
+                                                <div class="typing-indicator scale-125">
+                                                    <span></span><span></span><span></span>
+                                                </div>
+                                                <div v-if="isGenerating"
+                                                    class="flex items-center gap-1.5 text-[11px] text-gray-500 font-mono bg-white/50 backdrop-blur-sm px-2.5 py-1 rounded-full border border-white/50 animate-fade-in mt-1 shadow-sm typing-timer-badge">
+                                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                                    </svg>
+                                                    <span class="whitespace-nowrap">
+                                                        {{ currentWaitTime }}s
+                                                        <span v-if="estimatedGenerationTime || remoteEstimatedTime"
+                                                            class="text-gray-300 mx-0.5">/</span>
+                                                        <span v-if="estimatedGenerationTime && !isRemoteGenerating">{{
+                                                            estimatedGenerationTime }}s</span>
+                                                        <span v-else-if="remoteEstimatedTime">{{ remoteEstimatedTime }}s</span>
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div v-if="msg.role === 'assistant' && msg.uiTemplateBlocks && msg.uiTemplateBlocks.top && msg.uiTemplateBlocks.top.length"
+                                                class="ui-template-message-block ui-template-message-block-top">
+                                                <div v-for="(html, tIndex) in msg.uiTemplateBlocks.top"
+                                                    :key="'msg-ui-top-' + index + '-' + tIndex"
+                                                    class="w-full ui-template-render" @click="handleUiTemplateClick"
+                                                    v-html="html"></div>
+                                            </div>
+                                            <div v-if="msg.role === 'assistant' && uiTemplateUpdateStatus.state === 'running' && uiTemplateUpdateStatus.targetMessageId === msg.id && activeUiTemplates.some(t => t.placement === 'top')"
+                                                class="ui-template-message-block ui-template-message-block-top">
+                                                <div class="ui-template-pending-card" role="status" aria-live="polite">
+                                                    <div class="ui-template-pending-icon" aria-hidden="true">
+                                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                                d="M4 5a2 2 0 012-2h12a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm4 3h8M8 12h8M8 16h5">
+                                                            </path>
+                                                        </svg>
+                                                        <span class="live-dots"><i></i><i></i><i></i></span>
+                                                    </div>
+                                                    <div class="ui-template-pending-content">
+                                                        <div class="ui-template-pending-row">
+                                                            <span class="ui-template-pending-title">变量同步中</span>
+                                                            <span class="ui-template-pending-count">剩余 {{ uiTemplateUpdateStatus.remaining }}</span>
+                                                        </div>
+                                                        <div class="ui-template-pending-subtitle">
+                                                            {{ uiTemplateUpdateStatus.message || '正在读取最近剧情，整理状态栏变量' }}
+                                                        </div>
+                                                        <div class="ui-template-pending-bars" aria-hidden="true">
+                                                            <i></i><i></i><i></i>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -684,38 +888,6 @@
                                                                     v-html="renderMarkdown(parseCot(msg.content).cot, 'assistant', true)">
                                                                 </div>
                                                             </div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <div v-if="msg.role === 'assistant' && msg.uiTemplateBlocks && msg.uiTemplateBlocks.top && msg.uiTemplateBlocks.top.length"
-                                                class="ui-template-message-block ui-template-message-block-top">
-                                                <div v-for="(html, tIndex) in msg.uiTemplateBlocks.top"
-                                                    :key="'msg-ui-top-' + index + '-' + tIndex"
-                                                    class="w-full ui-template-render" @click="handleUiTemplateClick"
-                                                    v-html="html"></div>
-                                            </div>
-                                            <div v-if="msg.role === 'assistant' && uiTemplateUpdateStatus.state === 'running' && uiTemplateUpdateStatus.targetMessageId === msg.id && activeUiTemplates.some(t => t.placement === 'top')"
-                                                class="ui-template-message-block ui-template-message-block-top">
-                                                <div class="ui-template-pending-card" role="status" aria-live="polite">
-                                                    <div class="ui-template-pending-icon" aria-hidden="true">
-                                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                                                d="M4 5a2 2 0 012-2h12a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm4 3h8M8 12h8M8 16h5">
-                                                            </path>
-                                                        </svg>
-                                                        <span class="live-dots"><i></i><i></i><i></i></span>
-                                                    </div>
-                                                    <div class="ui-template-pending-content">
-                                                        <div class="ui-template-pending-row">
-                                                            <span class="ui-template-pending-title">变量同步中</span>
-                                                            <span class="ui-template-pending-count">剩余 {{ uiTemplateUpdateStatus.remaining }}</span>
-                                                        </div>
-                                                        <div class="ui-template-pending-subtitle">
-                                                            {{ uiTemplateUpdateStatus.message || '正在读取最近剧情，整理状态栏变量' }}
-                                                        </div>
-                                                        <div class="ui-template-pending-bars" aria-hidden="true">
-                                                            <i></i><i></i><i></i>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -853,7 +1025,7 @@
                     </template>
 
                     <!-- Typing Indicator -->
-                    <div v-if="(isGenerating || isRemoteGenerating) && !isReceiving && !isThinking"
+                    <div v-if="(isGenerating || isRemoteGenerating) && !isReceiving && !isThinking && !hasActiveToolInlineWork"
                         class="flex w-full justify-start">
                         <div class="flex max-w-[99%] md:max-w-[75%] lg:max-w-[70%] flex-row">
                             <div v-show="!settings.immersiveMode" class="flex-shrink-0 animate-message-in"
@@ -1020,15 +1192,16 @@
                                     <div v-if="memorySettings.enabled"
                                         class="flex items-center gap-1.5 px-3 py-1 md:py-1.5 rounded-full border shadow-sm transition-all duration-300 font-bold text-[10px] md:text-xs cursor-default"
                                         :class="{
-                                             'bg-gray-50 text-gray-600 border-gray-200': memoryExtractStatus === 'waiting',
-                                             'bg-amber-50 text-amber-600 border-amber-200': memoryExtractStatus === 'extracting',
-                                             'bg-[#ecfdf5] text-[#047857] border-[#a7f3d0]': memoryExtractStatus === 'success',
-                                             'bg-red-50 text-red-600 border-red-200': memoryExtractStatus === 'error',
+                                             'bg-blue-50 text-blue-700 border-blue-200': hasActiveToolInlineWork,
+                                             'bg-gray-50 text-gray-600 border-gray-200': !hasActiveToolInlineWork && memoryExtractStatus === 'waiting',
+                                             'bg-amber-50 text-amber-600 border-amber-200': !hasActiveToolInlineWork && memoryExtractStatus === 'extracting',
+                                             'bg-[#ecfdf5] text-[#047857] border-[#a7f3d0]': !hasActiveToolInlineWork && memoryExtractStatus === 'success',
+                                             'bg-red-50 text-red-600 border-red-200': !hasActiveToolInlineWork && memoryExtractStatus === 'error',
                                          }">
 
                                         <!-- Spinner for generating -->
-                                        <svg v-if="memoryExtractStatus === 'extracting'"
-                                            class="w-3 h-3 text-amber-500 animate-spin" fill="none"
+                                        <svg v-if="hasActiveToolInlineWork || memoryExtractStatus === 'extracting'"
+                                            :class="['w-3 h-3 animate-spin', hasActiveToolInlineWork ? 'text-blue-600' : 'text-amber-500']" fill="none"
                                             stroke="currentColor" viewBox="0 0 24 24">
                                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor"
                                                 stroke-width="4"></circle>
@@ -1050,9 +1223,11 @@
                                         <!-- Dot for waiting -->
                                         <div v-else class="w-1.5 h-1.5 rounded-full bg-gray-400"></div>
 
-                                        <span class="whitespace-nowrap">
+                                        <span v-if="hasActiveToolInlineWork" class="whitespace-nowrap">
+                                            {{ activeToolInlineStatusText || '调用中' }}
+                                        </span>
+                                        <span v-else-if="memoryExtractStatus !== 'extracting'" class="whitespace-nowrap">
                                             {{ memoryExtractStatus === 'waiting' ? '等待中' :
-                                            memoryExtractStatus === 'extracting' ? '记忆中...' :
                                             memoryExtractStatus === 'success' ? '已记忆' : '生成失败' }}
                                         </span>
                                     </div>
@@ -1181,7 +1356,7 @@
 
                             <!-- Send/Stop Button -->
                             <div class="flex-shrink-0 flex items-center gap-1">
-                                <button v-if="!isGenerating" @click="sendMessage" :disabled="!userInput.trim()"
+                                <button v-if="!isConversationBusy" @click="sendMessage" :disabled="!userInput.trim()"
                                     class="p-2 md:p-3 bg-primary-600 text-white rounded-2xl md:hover:bg-primary-700 md:hover:shadow-lg md:hover:-translate-y-0.5 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 transition-all shadow-md flex items-center justify-center w-[44px] h-[44px] md:w-[52px] md:h-[52px]"
                                     title="发送">
                                     <svg class="w-5 h-5 md:w-6 md:h-6 transform rotate-90" fill="none"
@@ -1278,7 +1453,7 @@
                     <!-- Search Controls -->
                     <div class="flex flex-1 w-full md:w-auto md:max-w-md gap-2" v-if="!isBatchDeleteMode">
                         <div class="relative flex-1 group">
-                            <input v-model="characterSearchQuery" type="text" placeholder="搜索角色卡名称或描述..."
+                            <input v-model="characterSearchQuery" type="text" placeholder="检索角色卡名称或描述..."
                                 class="w-full bg-white/80 backdrop-blur-sm border border-gray-200 rounded-2xl pl-10 pr-4 py-2.5 text-sm focus:ring-4 focus:ring-primary-500/10 focus:border-primary-500 outline-none transition-all shadow-sm group-hover:border-gray-300">
                             <svg class="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2 transition-colors group-focus-within:text-primary-500"
                                 fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1335,11 +1510,11 @@
                         </svg>
                     </div>
                     <h3 class="text-xl font-bold text-gray-800 mb-2">未找到匹配的角色卡</h3>
-                    <p class="text-gray-500 max-w-xs mx-auto mb-6">尝试更换搜索关键词，或者创作一个属于你的角色卡！</p>
+                    <p class="text-gray-500 max-w-xs mx-auto mb-6">尝试更换检索关键词，或者创作一个属于你的角色卡！</p>
                     <div class="flex flex-col md:flex-row gap-3 justify-center">
                         <button v-if="characterSearchQuery" @click="characterSearchQuery = ''"
                             class="px-6 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-bold hover:bg-gray-200 transition-colors">
-                            清除搜索
+                            清除检索
                         </button>
                         <button @click="currentView = 'generator'"
                             class="px-6 py-2.5 bg-primary-50 text-primary-600 rounded-xl font-bold hover:bg-primary-100 transition-colors flex items-center justify-center">
@@ -2809,6 +2984,78 @@
 
             <!-- Removed Friends View -->
 
+            <!-- Tools View -->
+            <div v-if="currentView === 'tools'" class="p-4 md:p-6 h-full overflow-y-auto animate-fade-in">
+                <div class="flex justify-between items-center mb-4 md:mb-6">
+                    <div class="flex items-center">
+                        <button @click="toggleMobileMenu"
+                            class="md:hidden mr-3 text-gray-500 md:hover:text-gray-700 active:text-gray-700 transition-colors">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M4 6h16M4 12h16m-7 6h7"></path>
+                            </svg>
+                        </button>
+                        <h2 class="text-xl md:text-2xl font-bold text-gray-800 flex items-center">
+                            <svg class="w-6 h-6 md:w-7 md:h-7 mr-2 text-primary-600" fill="none"
+                                stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94L14.7 6.3z">
+                                </path>
+                            </svg>
+                            工具
+                        </h2>
+                    </div>
+                </div>
+
+                <div id="active-tools-list" class="space-y-4">
+                    <div v-for="(tool, index) in activeTools" :key="tool.id || index"
+                        class="bg-white p-4 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all flex justify-between items-center">
+                        <button type="button" @click="editActiveTool(index)"
+                            class="flex-1 min-w-0 mr-4 flex items-center text-left">
+                            <div class="text-primary-600 bg-primary-50 mr-3 rounded-lg w-10 h-10 flex items-center justify-center flex-shrink-0">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94L14.7 6.3z">
+                                    </path>
+                                </svg>
+                            </div>
+                            <div class="min-w-0">
+                                <div class="flex items-center">
+                                    <h3 class="font-bold text-gray-800 truncate">{{ tool.name || '未命名工具' }}</h3>
+                                </div>
+                                <div class="text-xs text-gray-500 mt-1 tool-description-preview">
+                                    {{ getActiveToolDisplayDescription(tool) }}
+                                </div>
+                                <div v-if="isWebActiveTool(tool) && tool.enabled && !tool.tavilyApiKey"
+                                    class="mt-1 text-[11px] font-bold text-amber-600">
+                                    需要填写 Tavily API Key
+                                </div>
+                            </div>
+                        </button>
+                        <div class="flex items-center space-x-4 flex-shrink-0">
+                            <label class="relative inline-flex items-center cursor-pointer" @click.stop>
+                                <input type="checkbox" v-model="tool.enabled" @change="normalizeActiveTools()"
+                                    class="sr-only peer">
+                                <div
+                                    class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600">
+                                </div>
+                            </label>
+                            <div class="flex space-x-1 border-l border-gray-200 pl-4">
+                                <button @click="editActiveTool(index)"
+                                    class="p-2 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+                                    title="编辑">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z">
+                                        </path>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Memory View -->
             <div v-if="currentView === 'memory'" class="p-4 md:p-6 h-full overflow-y-auto animate-fade-in">
                 <div class="flex justify-between items-center mb-4 md:mb-6">
@@ -2829,8 +3076,9 @@
                             </svg>
                             记忆系统
                             <span v-if="isExtractingMemory || isBatchExtracting"
-                                class="ml-2 text-[11px] font-medium text-primary-600 bg-primary-50 px-2 py-0.5 rounded-full border border-primary-200">
-                                <svg class="w-3 h-3 inline-block mr-1 animate-spin" fill="none" stroke="currentColor"
+                                class="ml-2 inline-flex items-center justify-center text-primary-600 bg-primary-50 w-6 h-6 rounded-full border border-primary-200"
+                                title="正在处理记忆">
+                                <svg class="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor"
                                     viewBox="0 0 24 24">
                                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor"
                                         stroke-width="4"></circle>
@@ -2838,7 +3086,6 @@
                                         d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
                                     </path>
                                 </svg>
-                                提取中
                             </span>
                         </h2>
                     </div>
@@ -2881,7 +3128,7 @@
                                 d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10">
                             </path>
                         </svg>
-                        {{ memoryStats.activeTotal }} 条记忆
+                        {{ memoryStats.activeTotal }} 个分片
                     </div>
                     <div v-if="memoryStats.activeTurnCount > 0"
                         class="flex items-center gap-1.5 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100">
@@ -2891,15 +3138,6 @@
                             </path>
                         </svg>
                         {{ memoryStats.activeTurnCount }} 次对话
-                    </div>
-                    <div v-if="memoryStats.activeTotalChars > 0"
-                        class="flex items-center gap-1.5 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100">
-                        <svg class="w-3.5 h-3.5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129">
-                            </path>
-                        </svg>
-                        {{ memoryStats.activeTotalChars }} 字
                     </div>
                 </div>
 
@@ -2973,56 +3211,27 @@
                         <!-- Expandable Settings -->
                         <div v-if="memorySettings.enabled"
                             class="space-y-3 pt-3 border-t border-gray-100 animate-fade-in">
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                <div>
-                                    <label class="text-xs font-medium text-gray-500 block mb-1.5">记忆模式</label>
-                                    <div class="grid grid-cols-2 gap-1 bg-gray-50 border border-gray-200 rounded-xl p-1">
-                                        <button type="button" @click="memorySettings.mode = 'vector'"
-                                            :class="['px-3 py-2 text-xs font-bold rounded-lg transition-all', memorySettings.mode === 'vector' ? 'bg-white text-primary-700 shadow-sm border border-primary-100' : 'text-gray-400 hover:text-gray-600']">
-                                            向量模式
-                                        </button>
-                                        <button type="button" @click="memorySettings.mode = 'classic'"
-                                            :class="['px-3 py-2 text-xs font-bold rounded-lg transition-all', memorySettings.mode !== 'vector' ? 'bg-white text-primary-700 shadow-sm border border-primary-100' : 'text-gray-400 hover:text-gray-600']">
-                                            普通模式
-                                        </button>
+                            <div class="space-y-3">
+                                <div class="bg-gray-50/80 p-3 rounded-xl border border-gray-100">
+                                    <label class="text-xs font-medium text-gray-500 block mb-2">向量嵌入模型</label>
+                                    <button @click="openModelSelector('memoryEmbeddingModel')"
+                                        class="w-full px-3 py-2 text-sm text-left bg-white/80 border border-gray-200 rounded-xl hover:border-primary-300 hover:bg-white transition-all cursor-pointer truncate"
+                                        :title="memorySettings.embeddingModel || '请选择向量嵌入模型'">
+                                        <span
+                                            :class="memorySettings.embeddingModel ? 'text-gray-800 font-mono' : 'text-gray-400'">{{
+                                            memorySettings.embeddingModel || '请选择向量嵌入模型' }}</span>
+                                    </button>
+                                </div>
+                                <div class="bg-gray-50/80 p-3 rounded-xl border border-gray-100">
+                                    <div class="flex justify-between items-center mb-2">
+                                        <label class="text-xs font-medium text-gray-500">记忆召回分片数</label>
+                                        <span
+                                            class="text-xs font-mono text-primary-600 bg-primary-50 px-1.5 py-0.5 rounded border border-primary-100">{{
+                                            memorySettings.vectorTopK || 15 }} 个分片</span>
                                     </div>
+                                    <input type="range" v-model.number="memorySettings.vectorTopK" min="10" max="30" step="1"
+                                        class="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary-500">
                                 </div>
-                                <div v-if="memorySettings.mode !== 'vector'">
-                                    <label class="text-xs font-medium text-gray-500 block mb-1.5">记忆模型</label>
-                                    <div class="flex gap-2">
-                                        <button @click="openModelSelector('memoryModel')"
-                                            class="flex-1 px-3 py-2 text-sm text-left bg-gray-50/80 border border-gray-200 rounded-xl hover:border-primary-300 hover:bg-white transition-all cursor-pointer truncate"
-                                            :title="memorySettings.model || '未选择模型'">
-                                            <span
-                                                :class="memorySettings.model ? 'text-gray-800 font-mono' : 'text-gray-400'">{{
-                                                memorySettings.model || '未选择模型' }}</span>
-                                        </button>
-                                    </div>
-                                </div>
-                                <div v-else>
-                                    <label class="text-xs font-medium text-gray-500 block mb-1.5">向量嵌入模型</label>
-                                    <div class="flex gap-2">
-                                        <button @click="openModelSelector('memoryEmbeddingModel')"
-                                            class="flex-1 px-3 py-2 text-sm text-left bg-gray-50/80 border border-gray-200 rounded-xl hover:border-primary-300 hover:bg-white transition-all cursor-pointer truncate"
-                                            :title="memorySettings.embeddingModel || '请选择向量嵌入模型'">
-                                            <span
-                                                :class="memorySettings.embeddingModel ? 'text-gray-800 font-mono' : 'text-gray-400'">{{
-                                                memorySettings.embeddingModel || '请选择向量嵌入模型' }}</span>
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div v-if="memorySettings.mode === 'vector'"
-                                class="bg-gray-50/80 p-3 rounded-xl border border-gray-100">
-                                <div class="flex justify-between items-center mb-2">
-                                    <label class="text-xs font-medium text-gray-500">记忆召回数量</label>
-                                    <span
-                                        class="text-xs font-mono text-primary-600 bg-primary-50 px-1.5 py-0.5 rounded border border-primary-100">{{
-                                        memorySettings.vectorTopK || 15 }} 条</span>
-                                </div>
-                                <input type="range" v-model.number="memorySettings.vectorTopK" min="15" max="50" step="1"
-                                    class="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary-500">
                             </div>
 
                             <!-- Context Compression Settings -->
@@ -3032,8 +3241,7 @@
                                         <label class="text-xs font-medium text-gray-500">保留最近楼层</label>
                                         <span
                                             class="text-xs font-mono text-primary-600 bg-primary-50 px-1.5 py-0.5 rounded border border-primary-100">{{
-                                            memorySettings.keepFloors === 0 ? '关闭' : memorySettings.keepFloors + ' 楼' +
-                                            (memoryStats.savedChars > 0 ? '（节约' + memoryStats.savedChars + '字）' : '')
+                                            memorySettings.keepFloors === 0 ? '关闭' : memorySettings.keepFloors + ' 楼'
                                             }}</span>
                                     </div>
                                     <input type="range" v-model.number="keepFloorsSlider" min="10" max="65" step="5"
@@ -3047,7 +3255,7 @@
                 </div>
 
                 <!-- Vector Memory View -->
-                <div v-if="memorySettings.enabled && memorySettings.mode === 'vector'"
+                <div v-if="memorySettings.enabled"
                     class="bg-white/70 backdrop-blur-sm p-1 rounded-2xl border border-gray-200 shadow-sm mb-4 overflow-hidden">
                     <div class="w-full flex justify-between items-center px-4 py-3 rounded-xl transition-all font-bold text-gray-700 bg-white">
                         <span class="flex items-center min-w-0">
@@ -3057,17 +3265,17 @@
                                         d="M4 7h16M4 12h10M4 17h7"></path>
                                 </svg>
                             </div>
-                            <span class="truncate">向量记忆视图</span>
+                            <span class="truncate">向量记忆检索</span>
                         </span>
                         <div class="text-xs font-mono text-gray-600 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-1">
-                            {{ memoryStats.vector }} 片段
+                            {{ memoryStats.vector }} 个分片
                         </div>
                     </div>
 
                     <div class="px-4 pb-4 pt-3 border-t border-gray-100 space-y-4">
                         <div class="grid grid-cols-2 gap-2">
                             <div class="rounded-xl bg-gray-50 border border-gray-100 px-3 py-2">
-                                <div class="text-[10px] font-bold text-gray-400 mb-1">总片段</div>
+                                <div class="text-[10px] font-bold text-gray-400 mb-1">总分片</div>
                                 <div class="text-lg font-black text-gray-800">{{ memoryStats.vector }}</div>
                             </div>
                             <div class="rounded-xl bg-gray-50 border border-gray-100 px-3 py-2">
@@ -3080,11 +3288,11 @@
                             <input v-model="vectorMemorySearchQuery"
                                 :disabled="isVectorMemorySearching"
                                 class="flex-1 min-w-0 px-3 py-2 text-sm bg-gray-50/80 border border-gray-200 rounded-xl focus:bg-white focus:border-primary-300 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
-                                placeholder="输入一句模拟对话">
+                                placeholder="输入需要检索的内容">
                             <button type="submit"
                                 :disabled="isVectorMemorySearching || !vectorMemorySearchQuery.trim() || memoryStats.vector === 0"
                                 class="min-h-[42px] px-4 py-2.5 text-sm font-bold rounded-xl bg-primary-600 hover:bg-primary-700 text-white disabled:opacity-40 disabled:cursor-not-allowed active:scale-95 transition-all">
-                                {{ isVectorMemorySearching ? '模拟中' : '模拟对话' }}
+                                {{ isVectorMemorySearching ? '检索中' : '检索记忆' }}
                             </button>
                             <button v-if="vectorMemorySearchQuery || vectorMemorySearchResults.length > 0 || vectorMemorySearchError"
                                 type="button" @click="clearVectorMemorySearch()"
@@ -3100,7 +3308,7 @@
 
                         <div v-if="vectorMemorySearchResults.length > 0" class="space-y-2">
                             <div class="flex items-center justify-between gap-3 text-[11px] font-bold text-gray-500">
-                                <span>记忆片段 · {{ vectorMemorySearchResults.length }} / 20</span>
+                                <span>记忆分片 · {{ vectorMemorySearchResults.length }} / 20</span>
                                 <div class="grid grid-cols-2 gap-1 bg-gray-50 border border-gray-200 rounded-lg p-0.5">
                                     <button type="button" @click="vectorMemorySearchSortMode = 'time'"
                                         :class="['px-2 py-1 rounded-md transition-all', vectorMemorySearchSortMode === 'time' ? 'bg-white text-primary-700 shadow-sm border border-primary-100' : 'text-gray-400 hover:text-gray-600']">
@@ -3130,352 +3338,7 @@
                     </div>
                 </div>
 
-                <!-- Category Filter -->
-                <div v-if="memoryStats.classic > 0 && memorySettings.mode !== 'vector'" class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
-                    <button @click="memoryFilterCategory = 'all'"
-                        :class="['memory-filter-btn cursor-pointer rounded-xl py-2 text-xs font-bold transition-all border flex items-center justify-center gap-1.5', 
-                        memoryFilterCategory === 'all' ? 'bg-gradient-to-r from-gray-800 to-gray-900 text-white border-gray-700 shadow-lg shadow-gray-900/20' : 'bg-white border-gray-200 hover:border-gray-300 text-gray-600 hover:shadow-sm']">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                d="M4 6h16M4 10h16M4 14h16M4 18h16"></path>
-                        </svg>
-                        全部 <span class="opacity-70">{{ memoryStats.classic }}</span>
-                    </button>
-                    <button @click="memoryFilterCategory = 'event'"
-                        :class="['memory-filter-btn cursor-pointer rounded-xl py-2 text-xs font-bold transition-all border flex items-center justify-center gap-1.5', 
-                        memoryFilterCategory === 'event' ? 'bg-gradient-to-r from-purple-500 to-purple-600 text-white border-purple-500 shadow-lg shadow-purple-500/20' : 'bg-white border-gray-200 hover:border-purple-300 text-gray-600 hover:text-purple-600 hover:shadow-sm']">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z">
-                            </path>
-                        </svg>
-                        事件 <span class="opacity-70">{{ memoryStats.byCategory.event }}</span>
-                    </button>
-                    <button @click="memoryFilterCategory = 'state'"
-                        :class="['memory-filter-btn cursor-pointer rounded-xl py-2 text-xs font-bold transition-all border flex items-center justify-center gap-1.5', 
-                        memoryFilterCategory === 'state' ? 'bg-gradient-to-r from-emerald-500 to-green-600 text-white border-emerald-500 shadow-lg shadow-emerald-500/20' : 'bg-white border-gray-200 hover:border-emerald-300 text-gray-600 hover:text-emerald-600 hover:shadow-sm']">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                        </svg>
-                        状态 <span class="opacity-70">{{ memoryStats.byCategory.state }}</span>
-                    </button>
-                    <button @click="memoryFilterCategory = 'relationship'"
-                        :class="['memory-filter-btn cursor-pointer rounded-xl py-2 text-xs font-bold transition-all border flex items-center justify-center gap-1.5', 
-                        memoryFilterCategory === 'relationship' ? 'bg-gradient-to-r from-pink-500 to-rose-500 text-white border-pink-500 shadow-lg shadow-pink-500/20' : 'bg-white border-gray-200 hover:border-pink-300 text-gray-600 hover:text-pink-600 hover:shadow-sm']">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z">
-                            </path>
-                        </svg>
-                        关系 <span class="opacity-70">{{ memoryStats.byCategory.relationship }}</span>
-                    </button>
-                </div>
-
-                <!-- Memory List -->
-                <div v-if="memorySettings.mode !== 'vector' && filteredMemories.length > 0" class="space-y-3">
-                    <div v-for="(mem, mIdx) in filteredMemories" :key="mem.id"
-                        :class="['memory-card group relative bg-white rounded-2xl border overflow-hidden', 'cat-' + mem.category, mem.enabled === false ? 'opacity-50 grayscale-[30%]' : '']">
-                        <!-- Top accent gradient bar -->
-                        <div :class="['absolute top-0 left-0 right-0 h-[3px]',
-                            mem.category === 'event' ? 'bg-gradient-to-r from-purple-400 to-violet-500' :
-                            mem.category === 'state' ? 'bg-gradient-to-r from-emerald-400 to-teal-500' :
-                            'bg-gradient-to-r from-pink-400 to-rose-500']"></div>
-                        <div class="p-4 pt-4">
-                            <div class="flex items-start justify-between mb-2">
-                                <div class="flex items-center gap-2 flex-wrap">
-                                    <span :class="['inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg font-bold border shadow-sm', 
-                                        mem.category === 'event' ? 'bg-purple-50 text-purple-700 border-purple-200/80' : 
-                                        mem.category === 'state' ? 'bg-emerald-50 text-emerald-700 border-emerald-200/80' : 
-                                        'bg-pink-50 text-pink-700 border-pink-200/80']">
-                                        <svg v-if="mem.category === 'event'" class="w-3 h-3" fill="none"
-                                            stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z">
-                                            </path>
-                                        </svg>
-                                        <svg v-else-if="mem.category === 'state'" class="w-3 h-3" fill="none"
-                                            stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                                        </svg>
-                                        <svg v-else class="w-3 h-3" fill="none" stroke="currentColor"
-                                            viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                                d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z">
-                                            </path>
-                                        </svg>
-                                        {{ mem.category === 'event' ? '事件' : mem.category === 'state' ? '状态' : '关系' }}
-                                    </span>
-                                    <span
-                                        class="text-[10px] text-gray-400 font-mono bg-gray-50 px-2 py-0.5 rounded-md border border-gray-100">R{{
-                                        mem.turn || '?' }}</span>
-                                </div>
-                                <div
-                                    class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                                    <button @click="toggleMemory(mem.id)"
-                                        class="p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
-                                        :title="mem.enabled !== false ? '禁用' : '启用'">
-                                        <svg v-if="mem.enabled !== false" class="w-4 h-4 text-emerald-500" fill="none"
-                                            stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                                            <path stroke-linecap="round" stroke-linejoin="round"
-                                                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                                            <path stroke-linecap="round" stroke-linejoin="round"
-                                                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z">
-                                            </path>
-                                        </svg>
-                                        <svg v-else class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor"
-                                            viewBox="0 0 24 24" stroke-width="2">
-                                            <path stroke-linecap="round" stroke-linejoin="round"
-                                                d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21">
-                                            </path>
-                                        </svg>
-                                    </button>
-                                    <button @click="editMemory(mem.id)"
-                                        class="p-1.5 rounded-lg hover:bg-gray-100 transition-colors" title="编辑">
-                                        <svg class="w-4 h-4 text-gray-400 hover:text-primary-500 transition-colors"
-                                            fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z">
-                                            </path>
-                                        </svg>
-                                    </button>
-                                    <button @click="deleteMemory(mem.id)"
-                                        class="p-1.5 rounded-lg hover:bg-red-50 transition-colors" title="删除">
-                                        <svg class="w-4 h-4 text-gray-400 hover:text-red-500 transition-colors"
-                                            fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16">
-                                            </path>
-                                        </svg>
-                                    </button>
-                                </div>
-                            </div>
-                            <p class="text-sm text-gray-700 leading-relaxed pr-2">{{ mem.summary }}</p>
-                            <div v-if="mem.category === 'event' && (mem.time || mem.location || (mem.npcs && mem.npcs.length > 0))"
-                                class="flex items-center flex-wrap gap-2 mt-2.5 pt-2.5 border-t border-gray-100/80">
-                                <span v-if="mem.time"
-                                    class="inline-flex items-center gap-1 text-[11px] text-amber-700 bg-amber-50/80 border border-amber-200/60 rounded-lg px-2 py-1 font-medium">
-                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                                    </svg>
-                                    {{ mem.time }}
-                                </span>
-                                <span v-if="mem.location"
-                                    class="inline-flex items-center gap-1 text-[11px] text-teal-700 bg-teal-50/80 border border-teal-200/60 rounded-lg px-2 py-1 font-medium">
-                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                            d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z">
-                                        </path>
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                            d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                                    </svg>
-                                    {{ mem.location }}
-                                </span>
-                                <span v-if="mem.npcs && mem.npcs.length > 0"
-                                    class="inline-flex items-center gap-1 text-[11px] text-indigo-700 bg-indigo-50/80 border border-indigo-200/60 rounded-lg px-2 py-1 font-medium">
-                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                            d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
-                                    </svg>
-                                    {{ mem.npcs.join(' · ') }}
-                                </span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Empty State -->
-                <div v-else-if="memorySettings.mode !== 'vector'" class="flex flex-col items-center justify-center py-16 md:py-24 px-4">
-                    <div class="relative mb-8">
-                        <div
-                            class="w-28 h-28 bg-gradient-to-br from-primary-100 via-blue-50 to-indigo-100 rounded-full flex items-center justify-center border border-primary-100 shadow-inner">
-                            <svg class="w-14 h-14 text-primary-300" fill="none" stroke="currentColor"
-                                viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
-                                    d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z">
-                                </path>
-                            </svg>
-                        </div>
-                        <!-- Decorative rings -->
-                        <div
-                            class="absolute -inset-3 border-2 border-primary-100/50 rounded-full border-dashed memory-spin-slow">
-                        </div>
-                        <div class="absolute -inset-6 border border-primary-50/40 rounded-full border-dashed memory-spin-slow"
-                            style="animation-direction: reverse; animation-duration: 20s"></div>
-                    </div>
-                    <p class="text-lg font-black text-gray-700 mb-2 tracking-wide">暂无记忆数据</p>
-                    <p class="text-sm text-gray-400 max-w-[280px] text-center leading-relaxed">开启记忆系统后，AI
-                        会在对话中自动提取摘要，构建长期记忆网络。</p>
-                </div>
-
             </div>
-
-            <!-- Memory Editor Modal -->
-            <teleport to="body">
-                <transition name="fade">
-                    <div v-if="showMemoryEditor"
-                        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in memory-modal-overlay"
-                        @click.self="showMemoryEditor = false">
-                        <div
-                            class="bg-white rounded-2xl border border-gray-200 w-full max-w-lg flex flex-col shadow-2xl overflow-hidden max-h-[85vh]">
-                            <!-- Header -->
-                            <div
-                                class="p-4 md:p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50/80 flex-shrink-0">
-                                <div class="flex items-center gap-3">
-                                    <div class="p-2 bg-primary-50 text-primary-600 rounded-lg">
-                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                                d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z">
-                                            </path>
-                                        </svg>
-                                    </div>
-                                    <div>
-                                        <h3 class="text-lg font-bold text-gray-800 leading-tight">{{ editingMemory.id
-                                            !== undefined ? '编辑记忆' : '添加记忆' }}</h3>
-                                        <p class="text-xs text-gray-500">Memory Entry</p>
-                                    </div>
-                                </div>
-                                <button @click="showMemoryEditor = false"
-                                    class="text-gray-400 hover:text-gray-600 hover:bg-gray-100 p-2 rounded-full transition-all">
-                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                            d="M6 18L18 6M6 6l12 12"></path>
-                                    </svg>
-                                </button>
-                            </div>
-
-                            <!-- Body -->
-                            <div class="p-6 space-y-5 bg-gray-50/30 overflow-y-auto custom-scrollbar">
-                                <!-- Category -->
-                                <div>
-                                    <label
-                                        class="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">分类</label>
-                                    <div class="grid grid-cols-3 gap-2">
-                                        <button @click="editingMemory.data.category = 'event'"
-                                            :class="['py-2.5 rounded-xl text-xs font-bold transition-all border flex items-center justify-center gap-1.5', editingMemory.data.category === 'event' ? 'bg-purple-50 text-purple-700 border-purple-300 shadow-sm' : 'bg-white text-gray-500 border-gray-200 hover:border-purple-200 hover:text-purple-600']">
-                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor"
-                                                viewBox="0 0 24 24">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z">
-                                                </path>
-                                            </svg>
-                                            事件
-                                        </button>
-                                        <button @click="editingMemory.data.category = 'state'"
-                                            :class="['py-2.5 rounded-xl text-xs font-bold transition-all border flex items-center justify-center gap-1.5', editingMemory.data.category === 'state' ? 'bg-emerald-50 text-emerald-700 border-emerald-300 shadow-sm' : 'bg-white text-gray-500 border-gray-200 hover:border-emerald-200 hover:text-emerald-600']">
-                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor"
-                                                viewBox="0 0 24 24">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                                    d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                                            </svg>
-                                            状态
-                                        </button>
-                                        <button @click="editingMemory.data.category = 'relationship'"
-                                            :class="['py-2.5 rounded-xl text-xs font-bold transition-all border flex items-center justify-center gap-1.5', editingMemory.data.category === 'relationship' ? 'bg-pink-50 text-pink-700 border-pink-300 shadow-sm' : 'bg-white text-gray-500 border-gray-200 hover:border-pink-200 hover:text-pink-600']">
-                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor"
-                                                viewBox="0 0 24 24">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                                    d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z">
-                                                </path>
-                                            </svg>
-                                            关系
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <!-- Summary -->
-                                <div>
-                                    <label
-                                        class="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">记忆内容</label>
-                                    <textarea v-model="editingMemory.data.summary" rows="4" placeholder="描述发生了什么..."
-                                        class="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 text-gray-800 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 focus:outline-none transition-all shadow-sm text-sm leading-relaxed resize-y min-h-[100px]"></textarea>
-                                </div>
-
-                                <!-- Time & Location (event only) -->
-                                <div v-if="editingMemory.data.category === 'event'" class="grid grid-cols-2 gap-3">
-                                    <div>
-                                        <label
-                                            class="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">
-                                            <span class="inline-flex items-center gap-1">
-                                                <svg class="w-3 h-3 text-amber-500" fill="none" stroke="currentColor"
-                                                    viewBox="0 0 24 24">
-                                                    <path stroke-linecap="round" stroke-linejoin="round"
-                                                        stroke-width="2"
-                                                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                                                </svg>
-                                                时间
-                                            </span>
-                                        </label>
-                                        <input type="text" v-model="editingMemory.data.time" placeholder="如：深夜、第二天早上"
-                                            class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-800 focus:ring-2 focus:ring-amber-500 focus:border-amber-500 focus:outline-none transition-all shadow-sm text-sm">
-                                    </div>
-                                    <div>
-                                        <label
-                                            class="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">
-                                            <span class="inline-flex items-center gap-1">
-                                                <svg class="w-3 h-3 text-teal-500" fill="none" stroke="currentColor"
-                                                    viewBox="0 0 24 24">
-                                                    <path stroke-linecap="round" stroke-linejoin="round"
-                                                        stroke-width="2"
-                                                        d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z">
-                                                    </path>
-                                                </svg>
-                                                地点
-                                            </span>
-                                        </label>
-                                        <input type="text" v-model="editingMemory.data.location" placeholder="如：森林、城堡内"
-                                            class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-800 focus:ring-2 focus:ring-teal-500 focus:border-teal-500 focus:outline-none transition-all shadow-sm text-sm">
-                                    </div>
-                                </div>
-                                
-                                <div v-if="editingMemory.data.category === 'event'">
-                                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5 mt-3">
-                                        <span class="inline-flex items-center gap-1">
-                                            <svg class="w-3 h-3 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
-                                            </svg>
-                                            场景NPC (逗号分隔)
-                                        </span>
-                                    </label>
-                                    <input type="text" :value="editingMemory.data.npcs ? editingMemory.data.npcs.join(', ') : ''" @input="editingMemory.data.npcs = $event.target.value.split(',').map(s=>s.trim()).filter(Boolean)" placeholder="如：店小二, 守夜人"
-                                        class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none transition-all shadow-sm text-sm">
-                                </div>
-
-                                <!-- Enabled -->
-                                <div
-                                    class="flex items-center justify-between p-3 bg-white rounded-xl border border-gray-200 shadow-sm">
-                                    <span class="text-sm text-gray-700 font-medium">启用此记忆</span>
-                                    <label class="relative inline-flex items-center cursor-pointer">
-                                        <input type="checkbox" v-model="editingMemory.data.enabled"
-                                            class="sr-only peer">
-                                        <div
-                                            class="w-10 h-[22px] bg-gray-200 rounded-full peer peer-checked:after:translate-x-[18px] peer-checked:after:border-white after:content-[''] after:absolute after:top-[3px] after:left-[3px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all after:shadow-sm peer-checked:bg-primary-600">
-                                        </div>
-                                    </label>
-                                </div>
-                            </div>
-
-                            <!-- Footer -->
-                            <div
-                                class="p-4 md:p-5 border-t border-gray-100 flex justify-end space-x-3 bg-gray-50/80 flex-shrink-0">
-                                <button @click="showMemoryEditor = false"
-                                    class="px-5 py-2.5 bg-white hover:bg-gray-100 text-gray-700 border border-gray-200 rounded-xl transition-all shadow-sm font-medium text-sm active:scale-95">取消</button>
-                                <button @click="saveMemory()"
-                                    class="px-6 py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-xl transition-all shadow-md hover:shadow-lg font-bold text-sm active:scale-95 flex items-center">
-                                    <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                            d="M5 13l4 4L19 7">
-                                        </path>
-                                    </svg>
-                                    保存记忆
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </transition>
-            </teleport>
 
             <!-- World Info View -->
             <div v-if="currentView === 'worldinfo'" class="p-4 md:p-6 h-full overflow-y-auto animate-fade-in">
@@ -3689,7 +3552,7 @@
                         </svg>
                     </div>
                     <h3 class="text-lg font-bold text-gray-900 mb-1">无需补录</h3>
-                    <p class="text-sm text-gray-500">当前没有遗漏的记忆片段</p>
+                    <p class="text-sm text-gray-500">当前没有遗漏的记忆分片</p>
                 </div>
                 <div class="bg-gray-50 p-4 flex justify-center border-t border-gray-100">
                     <button @click="showNoMemoryNeededModal = false"
@@ -3838,7 +3701,7 @@
                     </div>
                     <div class="p-4 border-b border-gray-100 flex flex-col gap-3">
                         <input v-model="modelSearchQuery" type="text"
-                            :placeholder="modelSelectionTarget === 'memoryEmbeddingModel' ? '已锁定：embedding' : '搜索模型...'"
+                            :placeholder="modelSelectionTarget === 'memoryEmbeddingModel' ? '已锁定：embedding' : '检索模型...'"
                             :readonly="modelSelectionTarget === 'memoryEmbeddingModel'"
                             :title="modelSelectionTarget === 'memoryEmbeddingModel' ? '模型选择已锁定' : ''"
                             :class="['w-full border rounded-lg px-4 py-2 focus:outline-none transition-all shadow-sm', modelSelectionTarget === 'memoryEmbeddingModel' ? 'bg-gray-100 border-gray-200 text-gray-400 placeholder-gray-400 cursor-not-allowed shadow-none select-none' : 'bg-gray-50 border-gray-300 text-gray-800 focus:ring-2 focus:ring-primary-500 focus:shadow-md']">
@@ -3876,7 +3739,7 @@
                                     class="text-gray-700 font-mono font-medium group-hover:text-primary-600 transition-colors">{{
                                     model.id }}</span>
                                 <span
-                                    v-if="(modelSelectionTarget === 'memoryModel' ? memorySettings.model : (modelSelectionTarget === 'memoryEmbeddingModel' ? memorySettings.embeddingModel : settings[modelSelectionTarget])) === model.id"
+                                    v-if="(modelSelectionTarget === 'memoryEmbeddingModel' ? memorySettings.embeddingModel : settings[modelSelectionTarget]) === model.id"
                                     class="text-primary-600 bg-primary-50 p-1 rounded-full shadow-sm">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -4471,6 +4334,118 @@
             </div>
         </div>
 
+        <!-- Active Tool Editor Modal -->
+        <div v-if="showActiveToolEditor"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+            <div
+                class="bg-white rounded-2xl border border-gray-200 w-full max-w-3xl flex flex-col shadow-2xl max-h-[90vh] overflow-hidden animate-fade-in">
+                <div
+                    class="p-4 md:p-5 border-b border-gray-100 flex justify-end items-center bg-gray-50/80 backdrop-blur-sm flex-shrink-0 z-10">
+                    <button @click="showActiveToolEditor = false"
+                        class="text-gray-400 hover:text-gray-600 hover:bg-gray-100 p-2 rounded-full transition-all">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="flex-1 overflow-y-auto custom-scrollbar p-5 md:p-7 space-y-6 bg-gray-50/30">
+                    <div class="max-w-2xl mx-auto text-center">
+                        <div
+                            class="w-14 h-14 mx-auto rounded-2xl bg-primary-50 text-primary-600 flex items-center justify-center shadow-sm border border-primary-100">
+                            <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94L14.7 6.3z">
+                                </path>
+                            </svg>
+                        </div>
+                        <h3 class="mt-4 text-xl md:text-2xl font-bold text-gray-900 leading-tight">
+                            {{ editingActiveTool.data.name || '未命名工具' }}
+                        </h3>
+                        <p class="mt-3 text-sm text-gray-500 leading-relaxed whitespace-pre-wrap">
+                            {{ getActiveToolDisplayDescription(editingActiveTool.data) }}
+                        </p>
+                    </div>
+
+                    <div v-if="isWorldInfoActiveTool(editingActiveTool.data)"
+                        class="max-w-2xl mx-auto bg-white border border-gray-200 rounded-2xl p-5 md:p-6 shadow-sm">
+                        <div class="flex items-center justify-between gap-4 mb-4">
+                            <div>
+                                <div class="text-sm font-bold text-gray-800">世界书权限</div>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <button type="button"
+                                @click="editingActiveTool.data.worldInfoAccessMode = 'read'"
+                                class="px-4 py-3 rounded-xl border text-left transition-all"
+                                :class="getWorldInfoAccessMode(editingActiveTool.data) === 'read'
+                                    ? 'border-primary-500 bg-primary-50 text-primary-700 shadow-sm'
+                                    : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'">
+                                <div class="text-sm font-bold">阅读</div>
+                                <div class="text-xs mt-1 opacity-80">列出名字、读取完整内容</div>
+                            </button>
+                            <button type="button"
+                                @click="editingActiveTool.data.worldInfoAccessMode = 'edit'"
+                                class="px-4 py-3 rounded-xl border text-left transition-all"
+                                :class="getWorldInfoAccessMode(editingActiveTool.data) === 'edit'
+                                    ? 'border-primary-500 bg-primary-50 text-primary-700 shadow-sm'
+                                    : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'">
+                                <div class="text-sm font-bold">编辑</div>
+                                <div class="text-xs mt-1 opacity-80">读取内容，也允许修改内容</div>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div v-if="canConfigureActiveToolResultCount(editingActiveTool.data)"
+                        class="max-w-2xl mx-auto bg-white border border-gray-200 rounded-2xl p-5 md:p-6 shadow-sm">
+                        <div class="flex items-center justify-between gap-4 mb-5">
+                            <div>
+                                <div class="text-sm font-bold text-gray-800">返回条数</div>
+                                <div class="text-xs text-gray-500 mt-1">控制每次工具检索返回的内容条数</div>
+                            </div>
+                            <div class="text-xs font-mono text-primary-600 bg-primary-50 px-1.5 py-0.5 rounded border border-primary-100">
+                                {{ editingActiveTool.data.resultCount || 8 }} 条
+                            </div>
+                        </div>
+                        <input v-model.number="editingActiveTool.data.resultCount" type="range"
+                            :min="getActiveToolResultCountMin(editingActiveTool.data)"
+                            :max="getActiveToolResultCountMax(editingActiveTool.data)" step="1"
+                            class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary-600">
+                        <div class="mt-2 flex justify-between text-[11px] text-gray-400 font-medium">
+                            <span>{{ getActiveToolResultCountMin(editingActiveTool.data) }} 条</span>
+                            <span>{{ getActiveToolResultCountMax(editingActiveTool.data) }} 条</span>
+                        </div>
+                    </div>
+
+                    <div v-if="isWebActiveTool(editingActiveTool.data)"
+                        class="max-w-2xl mx-auto bg-white border border-gray-200 rounded-2xl p-5 md:p-6 shadow-sm space-y-5">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Tavily API Key</label>
+                            <input v-model.trim="editingActiveTool.data.tavilyApiKey"
+                                type="password"
+                                class="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-800 focus:ring-4 focus:ring-primary-500/10 focus:border-primary-500 focus:outline-none transition-all"
+                                placeholder="tvly-...">
+                        </div>
+                    </div>
+                </div>
+
+                <div
+                    class="p-4 md:p-5 border-t border-gray-100 flex justify-end space-x-3 bg-gray-50/80 backdrop-blur-sm flex-shrink-0 z-10">
+                    <button @click="showActiveToolEditor = false"
+                        class="px-5 py-2.5 bg-white hover:bg-gray-100 text-gray-700 border border-gray-200 rounded-xl transition-all shadow-sm font-medium text-sm active:scale-95">取消</button>
+                    <button @click="saveActiveTool"
+                        class="px-6 py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-xl transition-all shadow-md hover:shadow-lg font-bold text-sm active:scale-95 flex items-center">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7">
+                            </path>
+                        </svg>
+                        保存工具
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Auto Image Gen Inquiry Modal -->
         <div v-if="showAutoImageGenModal"
             class="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in">
@@ -4983,7 +4958,7 @@
                                         d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253">
                                     </path>
                                 </svg>
-                                <span>本次插入的世界书/记忆 (共 {{ lastTriggeredWorldInfos.length }} 条)</span>
+                                <span>本次插入的世界书/记忆 (共 {{ lastTriggeredWorldInfos.length }} 项)</span>
                                 <div class="ml-auto flex items-center">
                                     <svg class="w-4 h-4 text-blue-500 group-open:rotate-180 transition-transform duration-300"
                                         fill="none" stroke="currentColor" viewBox="0 0 24 24">
