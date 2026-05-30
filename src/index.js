@@ -432,11 +432,13 @@ async function serveStatic(request, env) {
     const pathname = new URL(request.url).pathname;
     const contentType = response.headers.get('content-type') || '';
     if (!shouldInject(pathname) || !contentType.includes('text/html')) return response;
-    return new HTMLRewriter().on('head', {
-        element(element) {
-            element.append(INJECTED_BOOTSTRAP, { html: true });
-        }
-    }).transform(response);
+
+    const html = await response.text();
+    const injected = html.replace('</head>', INJECTED_BOOTSTRAP + '</head>');
+    return new Response(injected, {
+        status: response.status,
+        headers: response.headers
+    });
 }
 
 export default {
