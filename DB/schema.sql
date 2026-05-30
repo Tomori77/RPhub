@@ -1,0 +1,2 @@
+﻿-- R2 版本不使用 D1 数据库。
+-- Pages/Functions 只需要绑定 R2 Bucket，绑定名：RP_SYNC_R2。

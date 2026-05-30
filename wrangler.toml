@@ -1,0 +1,11 @@
+name = "rp-hub"
+main = "src/index.js"
+compatibility_date = "2025-05-28"
+
+[assets]
+directory = "."
+binding = "ASSETS"
+
+[[r2_buckets]]
+binding = "RP_SYNC_R2"
+bucket_name = "rp-sync-r2"
