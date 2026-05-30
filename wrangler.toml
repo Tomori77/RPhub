@@ -8,4 +8,4 @@ binding = "ASSETS"
 
 [[r2_buckets]]
 binding = "RP_SYNC_R2"
-bucket_name = "rp-sync-r2"
+bucket_name = "rp0527"
