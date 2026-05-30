@@ -32,7 +32,7 @@
 
 ## 架构概览 (Architecture)
 
-```mermaid
+```
 flowchart TB
     subgraph Browser["浏览器 (Vue 3 SPA)"]
         direction TB
@@ -125,7 +125,7 @@ npx wrangler deploy
 
 ### R2 同步机制
 
-```mermaid
+```
 flowchart LR
     subgraph 上传
         A1["浏览器快照"] --> A2["切成 5MiB 分片\n(SHA-256 校验)"]
