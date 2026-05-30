@@ -21,7 +21,7 @@ rem ps::[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]
 rem ps::$repoZipUrl = 'https://codeload.github.com/STA1N156/RP-Hub/zip/refs/heads/main'
 rem ps::$root = (Resolve-Path (Split-Path -Parent $env:RP_HUB_UPDATER)).Path
 rem ps::$updaterName = Split-Path -Leaf $env:RP_HUB_UPDATER
-rem ps::$preserveRootNames = @('DB', 'work.js', '_worker.js', '.git', $updaterName)
+rem ps::$preserveRootNames = @('DB', 'work.js', '_worker.js', '.git', 'wrangler.toml', $updaterName)
 rem ps::
 rem ps::function Test-PreservedRootName {
 rem ps::    param([string] $Name)
@@ -89,8 +89,7 @@ rem ps::    }
 rem ps::    Show-ProgressBar -Percent 65 -Text '整理文件'
 rem ps::    $removeTargets = Get-ChildItem -LiteralPath $root -Force |
 rem ps::        Where-Object { -not (Test-PreservedRootName $_.Name) }
-rem ps::    $copyTargets = Get-ChildItem -LiteralPath $sourceRoot.FullName -Force |
-rem ps::        Where-Object { -not (Test-PreservedRootName $_.Name) }
+rem ps::    $copyTargets = Get-ChildItem -LiteralPath $sourceRoot.FullName -Force
 rem ps::    Show-ProgressBar -Percent 80 -Text '更新文件'
 rem ps::    foreach ($target in $removeTargets) {
 rem ps::        Remove-Item -LiteralPath $target.FullName -Recurse -Force
