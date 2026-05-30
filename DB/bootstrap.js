@@ -6,43 +6,35 @@
 
     const CONFIG = {
         apiEndpoint: '/api/rp-sync',
-        syncMetaStorageKey: 'rp_hub_sync_meta_v3',
-        deviceIdStorageKey: 'rp_hub_sync_device_id_v1',
         passwordStorageKey: 'rp_hub_sync_password_v1',
         knownDatabases: [
             { name: 'RPHubDB', stores: ['store'] },
             { name: 'AICharGen', stores: ['characters'] }
         ],
         localStoragePrefixes: ['rp_hub_', 'ai_chargen_'],
-        localStorageKeys: ['roleplay_hub_update_id'],
-        chunkSize: 5 * 1024 * 1024,
+        localStorageKeys: [],
+        ignoredLocalStorageKeys: ['roleplay_hub_update_id'],
+        chunkSize: 8 * 1024 * 1024,
         maxSnapshotBytes: 512 * 1024 * 1024,
-        uploadBatchSize: 1,
-        jsonDownloadPartChunks: 1,
-        downloadPartConcurrency: 2,
+        uploadPartConcurrency: 3,
+        downloadPartConcurrency: 3,
+        jsonDownloadPartChunks: 2,
         requestTimeoutMs: 60_000,
+        uploadPartTimeoutMs: 120_000,
+        commitTimeoutMs: 120_000,
         retryCount: 3,
         retryDelayMs: 600,
-        commitRetryCount: 1,
-        commitTimeoutMs: 120_000,
-        restoreBatchSize: 8
+        restoreBatchSize: 16
     };
 
     const state = {
         mounted: false,
         syncing: false,
-        dirty: false,
         progress: 0,
         statusText: '请选择同步方向。'
     };
 
-    const nativeWrite = document.write.bind(document);
-    const nativeWriteln = document.writeln ? document.writeln.bind(document) : nativeWrite;
-    const bufferedScriptUrls = [];
-    let bootstrapResolved = false;
-    let scriptsReleased = false;
     let syncButton = null;
-    let syncDot = null;
     let modalRoot = null;
     let modalTitle = null;
     let modalStatus = null;
@@ -56,23 +48,9 @@
     let passwordStatus = null;
     let passwordSubmitButton = null;
     let checkingPassword = false;
-    let restoringSnapshot = false;
 
     function wait(ms) {
         return new Promise((resolve) => setTimeout(resolve, ms));
-    }
-
-    function readJsonStorage(key, fallback) {
-        try {
-            const raw = localStorage.getItem(key);
-            return raw ? JSON.parse(raw) : fallback;
-        } catch (error) {
-            return fallback;
-        }
-    }
-
-    function writeJsonStorage(key, value) {
-        localStorage.setItem(key, JSON.stringify(value));
     }
 
     function getStoredSyncPassword() {
@@ -85,78 +63,6 @@
 
     function clearStoredSyncPassword() {
         localStorage.removeItem(CONFIG.passwordStorageKey);
-    }
-
-    function getDeviceId() {
-        let deviceId = localStorage.getItem(CONFIG.deviceIdStorageKey);
-        if (!deviceId) {
-            deviceId = `device-${crypto.randomUUID()}`;
-            localStorage.setItem(CONFIG.deviceIdStorageKey, deviceId);
-        }
-        return deviceId;
-    }
-
-    function getMeta() {
-        const meta = readJsonStorage(CONFIG.syncMetaStorageKey, {});
-        return {
-            lastSyncChecksum: typeof meta.lastSyncChecksum === 'string' ? meta.lastSyncChecksum : '',
-            lastSyncedAt: Number.isFinite(Number(meta.lastSyncedAt)) ? Number(meta.lastSyncedAt) : 0,
-            lastSyncDirection: typeof meta.lastSyncDirection === 'string' ? meta.lastSyncDirection : '',
-            lastLocalMutationAt: Number.isFinite(Number(meta.lastLocalMutationAt)) ? Number(meta.lastLocalMutationAt) : 0,
-            dirty: Boolean(meta.dirty)
-        };
-    }
-
-    function saveMeta(nextMeta) {
-        writeJsonStorage(CONFIG.syncMetaStorageKey, nextMeta);
-        state.dirty = Boolean(nextMeta.dirty);
-        updateButtonState();
-    }
-
-    function patchDocumentWrite() {
-        const interceptor = (html) => {
-            const match = typeof html === 'string' && html.match(/<script[^>]+src=['"]([^'"]+)['"]/i);
-            if (match && /assets\/js\/(utils|app)\.js/i.test(match[1])) {
-                bufferedScriptUrls.push(match[1]);
-                maybeReleaseScripts().catch(() => { });
-                return;
-            }
-            nativeWrite(html);
-        };
-
-        document.write = interceptor;
-        document.writeln = interceptor;
-    }
-
-    function loadScript(src) {
-        return new Promise((resolve, reject) => {
-            const script = document.createElement('script');
-            script.src = src;
-            script.async = false;
-            script.onload = () => resolve();
-            script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
-            document.body.appendChild(script);
-        });
-    }
-
-    async function releaseBufferedScripts() {
-        document.write = nativeWrite;
-        document.writeln = nativeWriteln;
-        while (!document.body) {
-            await wait(10);
-        }
-        for (const src of bufferedScriptUrls) {
-            await loadScript(src);
-        }
-        bufferedScriptUrls.length = 0;
-    }
-
-    async function maybeReleaseScripts() {
-        if (scriptsReleased || !bootstrapResolved || bufferedScriptUrls.length === 0) {
-            return;
-        }
-        scriptsReleased = true;
-        await releaseBufferedScripts();
     }
 
     function openDbByName(dbName, version) {
@@ -220,6 +126,14 @@
         });
     }
 
+    function isAppLocalStorageKey(key) {
+        return key !== CONFIG.passwordStorageKey
+            && !key.startsWith('rp_hub_sync_')
+            && !CONFIG.ignoredLocalStorageKeys.includes(key)
+            && (CONFIG.localStorageKeys.includes(key)
+                || CONFIG.localStoragePrefixes.some((prefix) => key.startsWith(prefix)));
+    }
+
     function readLocalStorageSnapshot() {
         const entries = [];
         for (let index = 0; index < localStorage.length; index += 1) {
@@ -254,15 +168,6 @@
         for (const key of keysToRemove) {
             localStorage.removeItem(key);
         }
-    }
-
-    function isAppLocalStorageKey(key) {
-        if (key === CONFIG.syncMetaStorageKey || key === CONFIG.deviceIdStorageKey || key === CONFIG.passwordStorageKey) {
-            return false;
-        }
-
-        return CONFIG.localStorageKeys.includes(key)
-            || CONFIG.localStoragePrefixes.some((prefix) => key.startsWith(prefix));
     }
 
     async function listIndexedDbNames() {
@@ -348,48 +253,6 @@
         }
 
         return databases;
-    }
-
-    async function replaceIndexedDbSnapshot(databases) {
-        const incomingDbMap = new Map((Array.isArray(databases) ? databases : [])
-            .filter((dbDef) => dbDef && typeof dbDef.name === 'string')
-            .map((dbDef) => [dbDef.name, dbDef]));
-
-        for (const dbDef of Array.isArray(databases) ? databases : []) {
-            if (!dbDef || typeof dbDef.name !== 'string') continue;
-            const knownDb = CONFIG.knownDatabases.find((item) => item.name === dbDef.name);
-            if (!knownDb) continue;
-
-            const stores = (Array.isArray(dbDef.stores) ? dbDef.stores : [])
-                .filter((storeDef) => knownDb.stores.includes(storeDef?.name));
-            if (stores.length === 0) continue;
-
-            const db = await openDbForRestore(dbDef);
-            try {
-                for (const storeDef of stores) {
-                    if (!db.objectStoreNames.contains(storeDef.name)) continue;
-                    await syncObjectStoreRecords(db, storeDef);
-                }
-            } finally {
-                db.close();
-            }
-        }
-
-        for (const knownDb of CONFIG.knownDatabases) {
-            const incomingDb = incomingDbMap.get(knownDb.name);
-            if (!incomingDb) {
-                await clearKnownIndexedDbStores(knownDb, knownDb.stores);
-                continue;
-            }
-
-            const incomingStoreNames = new Set((Array.isArray(incomingDb.stores) ? incomingDb.stores : [])
-                .map((storeDef) => storeDef?.name)
-                .filter((storeName) => knownDb.stores.includes(storeName)));
-            const missingStores = knownDb.stores.filter((storeName) => !incomingStoreNames.has(storeName));
-            if (missingStores.length > 0) {
-                await clearKnownIndexedDbStores(knownDb, missingStores);
-            }
-        }
     }
 
     function stableKeyToken(key) {
@@ -487,18 +350,55 @@
         }
     }
 
-    async function replaceLocalSnapshot(snapshot) {
-        restoringSnapshot = true;
-        try {
-            if (snapshot && Array.isArray(snapshot.localStorage)) {
-                restoreLocalStorageSnapshot(snapshot.localStorage);
+    async function replaceIndexedDbSnapshot(databases) {
+        const incomingDbMap = new Map((Array.isArray(databases) ? databases : [])
+            .filter((dbDef) => dbDef && typeof dbDef.name === 'string')
+            .map((dbDef) => [dbDef.name, dbDef]));
+
+        for (const dbDef of Array.isArray(databases) ? databases : []) {
+            if (!dbDef || typeof dbDef.name !== 'string') continue;
+            const knownDb = CONFIG.knownDatabases.find((item) => item.name === dbDef.name);
+            if (!knownDb) continue;
+
+            const stores = (Array.isArray(dbDef.stores) ? dbDef.stores : [])
+                .filter((storeDef) => knownDb.stores.includes(storeDef?.name));
+            if (stores.length === 0) continue;
+
+            const db = await openDbForRestore(dbDef);
+            try {
+                for (const storeDef of stores) {
+                    if (!db.objectStoreNames.contains(storeDef.name)) continue;
+                    await syncObjectStoreRecords(db, storeDef);
+                }
+            } finally {
+                db.close();
+            }
+        }
+
+        for (const knownDb of CONFIG.knownDatabases) {
+            const incomingDb = incomingDbMap.get(knownDb.name);
+            if (!incomingDb) {
+                await clearKnownIndexedDbStores(knownDb, knownDb.stores);
+                continue;
             }
 
-            if (snapshot && Array.isArray(snapshot.indexedDB)) {
-                await replaceIndexedDbSnapshot(snapshot.indexedDB);
+            const incomingStoreNames = new Set((Array.isArray(incomingDb.stores) ? incomingDb.stores : [])
+                .map((storeDef) => storeDef?.name)
+                .filter((storeName) => knownDb.stores.includes(storeName)));
+            const missingStores = knownDb.stores.filter((storeName) => !incomingStoreNames.has(storeName));
+            if (missingStores.length > 0) {
+                await clearKnownIndexedDbStores(knownDb, missingStores);
             }
-        } finally {
-            restoringSnapshot = false;
+        }
+    }
+
+    async function replaceLocalSnapshot(snapshot) {
+        if (snapshot && Array.isArray(snapshot.localStorage)) {
+            restoreLocalStorageSnapshot(snapshot.localStorage);
+        }
+
+        if (snapshot && Array.isArray(snapshot.indexedDB)) {
+            await replaceIndexedDbSnapshot(snapshot.indexedDB);
         }
     }
 
@@ -511,27 +411,8 @@
         return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
     }
 
-    function bytesToBase64(bytes) {
-        let binary = '';
-        const batchSize = 0x8000;
-        for (let start = 0; start < bytes.length; start += batchSize) {
-            const batch = bytes.subarray(start, start + batchSize);
-            binary += String.fromCharCode(...batch);
-        }
-        return btoa(binary);
-    }
-
-    function base64ToBytes(base64) {
-        const binary = atob(base64);
-        const bytes = new Uint8Array(binary.length);
-        for (let index = 0; index < binary.length; index += 1) {
-            bytes[index] = binary.charCodeAt(index);
-        }
-        return bytes;
-    }
-
     function createSessionId() {
-        return `sync_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+        return `sync_${Date.now()}_${crypto.randomUUID().replace(/-/g, '')}`;
     }
 
     async function buildSnapshot() {
@@ -543,14 +424,14 @@
     async function buildStableSnapshot() {
         let previousSnapshot = null;
 
-        for (let attempt = 0; attempt < 6; attempt += 1) {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
             const snapshot = await buildSnapshot();
             if (previousSnapshot && previousSnapshot.checksum === snapshot.checksum) {
                 return snapshot;
             }
 
             previousSnapshot = snapshot;
-            await wait(300);
+            await wait(180);
         }
 
         return previousSnapshot || await buildSnapshot();
@@ -558,7 +439,7 @@
 
     async function buildSnapshotFromData(localStorageEntries, indexedDbDatabases) {
         const json = JSON.stringify({
-            schemaVersion: 2,
+            schemaVersion: 3,
             localStorage: localStorageEntries,
             indexedDB: indexedDbDatabases
         });
@@ -573,35 +454,27 @@
             json,
             checksum: await sha256(json),
             recordCount,
-            totalBytes: new TextEncoder().encode(json).byteLength,
-            hasData: recordCount > 0
+            totalBytes: new TextEncoder().encode(json).byteLength
         };
     }
 
     async function splitIntoChunks(text, chunkSize = CONFIG.chunkSize) {
-        const chunks = [];
         const bytes = new TextEncoder().encode(text);
         const safeChunkSize = Math.max(5 * 1024 * 1024, Number(chunkSize) || CONFIG.chunkSize);
+        const chunks = [];
 
         for (let byteStart = 0; byteStart < bytes.length; byteStart += safeChunkSize) {
-            const payloadBytes = bytes.slice(byteStart, Math.min(byteStart + safeChunkSize, bytes.length));
+            const payloadBytes = bytes.subarray(byteStart, Math.min(byteStart + safeChunkSize, bytes.length));
             chunks.push({
                 index: chunks.length,
-                payload: bytesToBase64(payloadBytes),
+                bytes: payloadBytes,
                 checksum: await sha256Bytes(payloadBytes),
-                length: payloadBytes.byteLength,
-                encoding: 'base64-bytes'
+                length: payloadBytes.byteLength
             });
             await wait(0);
         }
 
-        return chunks.length > 0 ? chunks : [{
-            index: 0,
-            payload: '',
-            checksum: await sha256Bytes(new Uint8Array()),
-            length: 0,
-            encoding: 'base64-bytes'
-        }];
+        return chunks;
     }
 
     async function downloadRemoteSnapshot(allowVersionRetry = true) {
@@ -636,11 +509,10 @@
         };
     }
 
-
     async function downloadRemoteSnapshotJsonParts(remote) {
         const chunkCount = Number(remote.chunkCount || 0);
         if (!Number.isInteger(chunkCount) || chunkCount <= 0) {
-            throw new Error('服务器数据分片信息不正确。');
+            throw new Error('服务器数据格式不正确。');
         }
 
         const ranges = [];
@@ -675,10 +547,9 @@
                 }
                 byteParts[rangeIndex] = bytes;
                 completed += 1;
-                const downloadPercent = Math.round((completed / ranges.length) * 100);
                 updateProgress(
                     15 + Math.round((completed / ranges.length) * 35),
-                    '正在稳定下载服务器数据 ' + downloadPercent + '%...'
+                    `正在下载服务器数据 ${Math.round((completed / ranges.length) * 100)}%...`
                 );
                 await wait(0);
             }
@@ -699,6 +570,19 @@
     function buildSyncHeaders(options = {}) {
         const headers = {
             'content-type': 'application/json'
+        };
+        const password = typeof options.password === 'string' ? options.password : getStoredSyncPassword();
+        if (password) {
+            headers['x-rp-sync-password'] = password;
+        }
+        return headers;
+    }
+
+    function buildPartHeaders(chunk, options = {}) {
+        const headers = {
+            'content-type': 'application/octet-stream',
+            'x-rp-part-checksum': chunk.checksum,
+            'x-rp-part-length': String(chunk.length)
         };
         const password = typeof options.password === 'string' ? options.password : getStoredSyncPassword();
         if (password) {
@@ -806,6 +690,89 @@
         throw lastError || new Error('同步请求失败。');
     }
 
+    async function postUploadPart(upload, chunk) {
+        const retryCount = CONFIG.retryCount;
+        let lastError = null;
+        const params = new URLSearchParams({
+            action: 'upload-part',
+            uploadId: upload.uploadId,
+            key: upload.key,
+            index: String(chunk.index),
+            partNumber: String(chunk.index + 1),
+            last: chunk.index === upload.chunkCount - 1 ? '1' : '0'
+        });
+
+        for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), CONFIG.uploadPartTimeoutMs);
+            try {
+                const response = await fetch(`${CONFIG.apiEndpoint}?${params.toString()}`, {
+                    method: 'POST',
+                    headers: buildPartHeaders(chunk),
+                    body: chunk.bytes,
+                    credentials: 'same-origin',
+                    signal: controller.signal
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.ok) {
+                    if (response.status === 401) clearStoredSyncPassword();
+                    throw Object.assign(new Error(data.error || `HTTP ${response.status}`), { response: data, status: response.status });
+                }
+                return {
+                    partNumber: Number(data.partNumber),
+                    etag: data.etag,
+                    index: chunk.index,
+                    byteLength: chunk.length,
+                    checksum: chunk.checksum
+                };
+            } catch (error) {
+                const isAbort = error?.name === 'AbortError';
+                const status = isAbort ? 0 : error?.status;
+                const normalizedError = isAbort
+                    ? new Error('上传超时，请检查网络后重试。')
+                    : (error instanceof Error ? error : new Error(String(error)));
+                lastError = Object.assign(normalizedError, { status });
+                if (attempt >= retryCount || !shouldRetrySyncError(lastError)) {
+                    throw lastError;
+                }
+                await wait(CONFIG.retryDelayMs * (attempt + 1));
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        }
+
+        throw lastError || new Error('上传失败。');
+    }
+
+    async function uploadParts(upload, chunks) {
+        const parts = [];
+        let cursor = 0;
+        let completed = 0;
+        const workerCount = Math.min(CONFIG.uploadPartConcurrency, chunks.length);
+
+        if (chunks.length === 0) {
+            return parts;
+        }
+
+        async function uploadNextPart() {
+            while (cursor < chunks.length) {
+                const chunk = chunks[cursor];
+                cursor += 1;
+                const part = await postUploadPart(upload, chunk);
+                parts.push(part);
+                completed += 1;
+                updateProgress(
+                    36 + Math.round((completed / chunks.length) * 52),
+                    `正在上传服务器数据 ${Math.round((completed / chunks.length) * 100)}%...`
+                );
+                await wait(0);
+            }
+        }
+
+        await Promise.all(Array.from({ length: workerCount }, () => uploadNextPart()));
+        return parts.sort((a, b) => a.partNumber - b.partNumber);
+    }
+
     function updateProgress(progress, text) {
         state.progress = Math.max(0, Math.min(100, progress));
         state.statusText = text || state.statusText;
@@ -823,110 +790,13 @@
     function updateButtonState() {
         if (!syncButton) return;
         syncButton.classList.toggle('is-syncing', state.syncing);
-        syncButton.classList.toggle('is-dirty', state.dirty && !state.syncing);
         syncButton.querySelector('.rp-sync-button__label').textContent = state.syncing ? '处理中' : '同步';
-        if (syncDot) {
-            syncDot.hidden = !state.dirty || state.syncing;
-        }
     }
 
     function setActionButtonsDisabled(disabled) {
         if (pullButton) pullButton.disabled = disabled;
         if (pushButton) pushButton.disabled = disabled;
         if (closeButton) closeButton.disabled = disabled;
-    }
-
-    function markDirty() {
-        if (restoringSnapshot) return;
-
-        const meta = getMeta();
-        meta.dirty = true;
-        meta.lastLocalMutationAt = Date.now();
-        saveMeta(meta);
-    }
-
-    function markSynced(direction, checksum) {
-        const meta = getMeta();
-        meta.lastSyncDirection = direction;
-        meta.lastSyncChecksum = checksum || meta.lastSyncChecksum;
-        meta.lastSyncedAt = Date.now();
-        meta.dirty = false;
-        saveMeta(meta);
-    }
-
-    function installIndexedDbHooks() {
-        const originalAdd = IDBObjectStore.prototype.add;
-        const originalPut = IDBObjectStore.prototype.put;
-        const originalDelete = IDBObjectStore.prototype.delete;
-        const originalClear = IDBObjectStore.prototype.clear;
-
-        IDBObjectStore.prototype.add = function patchedAdd(value, key) {
-            const request = originalAdd.apply(this, arguments);
-            if (isAppIndexedDbStore(this.transaction?.db?.name, this.name)) {
-                request.addEventListener('success', markDirty, { once: true });
-            }
-            return request;
-        };
-
-        IDBObjectStore.prototype.put = function patchedPut(value, key) {
-            const request = originalPut.apply(this, arguments);
-            if (isAppIndexedDbStore(this.transaction?.db?.name, this.name)) {
-                request.addEventListener('success', markDirty, { once: true });
-            }
-            return request;
-        };
-
-        IDBObjectStore.prototype.delete = function patchedDelete(key) {
-            const request = originalDelete.apply(this, arguments);
-            if (isAppIndexedDbStore(this.transaction?.db?.name, this.name)) {
-                request.addEventListener('success', markDirty, { once: true });
-            }
-            return request;
-        };
-
-        IDBObjectStore.prototype.clear = function patchedClear() {
-            const request = originalClear.apply(this, arguments);
-            if (isAppIndexedDbStore(this.transaction?.db?.name, this.name)) {
-                request.addEventListener('success', markDirty, { once: true });
-            }
-            return request;
-        };
-    }
-
-    function isAppIndexedDbStore(dbName, storeName) {
-        return CONFIG.knownDatabases.some((dbDef) => {
-            return dbDef.name === dbName && dbDef.stores.includes(storeName);
-        });
-    }
-
-    function installLocalStorageHooks() {
-        const originalSetItem = Storage.prototype.setItem;
-        const originalRemoveItem = Storage.prototype.removeItem;
-        const originalClear = Storage.prototype.clear;
-
-        Storage.prototype.setItem = function patchedSetItem(key, value) {
-            const result = originalSetItem.apply(this, arguments);
-            if (this === localStorage && isAppLocalStorageKey(String(key))) {
-                markDirty();
-            }
-            return result;
-        };
-
-        Storage.prototype.removeItem = function patchedRemoveItem(key) {
-            const result = originalRemoveItem.apply(this, arguments);
-            if (this === localStorage && isAppLocalStorageKey(String(key))) {
-                markDirty();
-            }
-            return result;
-        };
-
-        Storage.prototype.clear = function patchedClear() {
-            const result = originalClear.apply(this, arguments);
-            if (this === localStorage) {
-                markDirty();
-            }
-            return result;
-        };
     }
 
     function getVueProxy() {
@@ -943,7 +813,7 @@
                 if (result && typeof result.then === 'function') {
                     await result;
                 }
-                await wait(1_200);
+                await wait(600);
                 return;
             }
             await wait(150);
@@ -1098,16 +968,16 @@
                     </div>
                     <button type="button" class="rp-sync-modal__close" aria-label="关闭">×</button>
                 </div>
-                <p class="rp-sync-modal__intro">这是纯手动同步模式。系统不会自动上传，也不会自动从服务器覆盖本地。上传时会先比较分片，只补传服务器缺少的部分。</p>
+                <p class="rp-sync-modal__intro">这是纯手动同步模式。系统不会自动上传，也不会自动从服务器覆盖本地。上传时会先比较数据，只同步需要更新的内容。</p>
                 <div class="rp-sync-choice-list">
                     <div class="rp-sync-choice">
                         <div class="rp-sync-choice__title">服务器同步</div>
-                        <p class="rp-sync-choice__desc">把服务器里已经保存的数据拉回当前浏览器，并覆盖本地缓存。完成后页面会自动刷新。</p>
+                        <p class="rp-sync-choice__desc">把服务器里保存的数据拉回当前浏览器，并覆盖本地缓存。完成后页面会自动刷新。</p>
                         <button type="button" class="rp-sync-modal__button is-primary" data-action="pull">服务器同步</button>
                     </div>
                     <div class="rp-sync-choice">
                         <div class="rp-sync-choice__title">本地同步</div>
-                        <p class="rp-sync-choice__desc">把当前浏览器里的本地数据上传到服务器。上传前会先比较分片，只补传服务器缺失的内容。</p>
+                        <p class="rp-sync-choice__desc">把当前浏览器里的本地数据上传到服务器。上传前会先比较数据，只同步需要更新的内容。</p>
                         <button type="button" class="rp-sync-modal__button" data-action="push">本地同步</button>
                     </div>
                 </div>
@@ -1178,7 +1048,6 @@
             }
 
             await replaceLocalSnapshot(remoteSnapshot);
-            markSynced('pull', response.checksum || '');
             updateProgress(100, '服务器数据已写入本地，页面即将刷新...');
             setTimeout(() => {
                 location.reload();
@@ -1195,6 +1064,7 @@
     async function pushToServer() {
         if (state.syncing) return;
 
+        let uploadSession = null;
         state.syncing = true;
         updateButtonState();
         openModal();
@@ -1205,107 +1075,96 @@
             await flushAppState();
 
             updateProgress(16, '正在读取本地浏览器数据...');
-            let snapshot = await buildStableSnapshot();
+            const snapshot = await buildStableSnapshot();
             if (snapshot.totalBytes > CONFIG.maxSnapshotBytes) {
                 throw new Error(`本地数据太大：${snapshot.totalBytes}/${CONFIG.maxSnapshotBytes}。`);
             }
 
-            updateProgress(24, '正在检查服务器是否已是同一份数据...');
-            const remoteStatus = await postSync({
-                action: 'status'
-            });
-            const remoteChunkCountBefore = Number(remoteStatus?.remote?.chunkCount || 0);
+            updateProgress(24, '正在检查服务器数据...');
+            const remoteStatus = await postSync({ action: 'status' });
             if (remoteStatus?.remote?.checksum && remoteStatus.remote.checksum === snapshot.checksum) {
-                markSynced('push', snapshot.checksum);
                 updateProgress(100, '服务器已是同一份数据，无需重复上传。');
                 setActionButtonsDisabled(false);
                 return;
             }
 
-            updateProgress(28, '正在切分数据...');
+            updateProgress(30, '正在切分上传数据...');
             const chunks = await splitIntoChunks(snapshot.json);
+            const chunkManifest = chunks.map((chunk) => ({
+                index: chunk.index,
+                checksum: chunk.checksum,
+                length: chunk.length
+            }));
             const uploadTotalBytes = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
             const sessionId = createSessionId();
-            updateProgress(34, `开始比较分片。服务器分片 ${remoteChunkCountBefore} / 本地分片 ${chunks.length}。`);
 
-            updateProgress(40, '正在与服务器比较已有分片...');
-            const manifestResponse = await postSync({
-                action: 'push-manifest',
+            uploadSession = await postSync({
+                action: 'upload-create',
                 sessionId,
-                deviceId: getDeviceId(),
                 checksum: snapshot.checksum,
                 recordCount: snapshot.recordCount,
+                chunkSize: CONFIG.chunkSize,
                 chunkCount: chunks.length,
                 totalBytes: uploadTotalBytes,
-                chunkManifest: chunks.map((chunk) => ({
-                    index: chunk.index,
-                    checksum: chunk.checksum,
-                    length: chunk.length,
-                    encoding: chunk.encoding
-                }))
+                chunkManifest
             });
 
-            const missingIndices = Array.isArray(manifestResponse.missingIndices)
-                ? manifestResponse.missingIndices
-                : [];
-
-            if (missingIndices.length === 0) {
-                updateProgress(88, '服务器已具备全部缺失分片，正在提交版本...');
-            } else {
-                const chunkMap = new Map(chunks.map((chunk) => [chunk.index, chunk]));
-                const totalMissing = missingIndices.length;
-                let pendingIndices = missingIndices.slice();
-                let uploadedCount = 0;
-
-                while (pendingIndices.length > 0) {
-                    const batchIndices = pendingIndices.slice(0, CONFIG.uploadBatchSize);
-                    const batchChunks = batchIndices.map((index) => {
-                        const chunk = chunkMap.get(index);
-                        if (!chunk) {
-                            throw new Error(`本地缺少分片 ${index}。`);
-                        }
-                        return {
-                            index: chunk.index,
-                            payload: chunk.payload,
-                            checksum: chunk.checksum
-                        };
-                    });
-
-                    uploadedCount = Math.min(uploadedCount + batchChunks.length, totalMissing);
-                    const uploadPercent = Math.round((uploadedCount / totalMissing) * 100);
-                    updateProgress(
-                        40 + Math.round((uploadedCount / totalMissing) * 45),
-                        `正在上传服务器数据 ${uploadPercent}%...`
-                    );
-
-                    const batchResponse = await postSync({
-                        action: 'push-chunks',
-                        sessionId,
-                        chunks: batchChunks
-                    });
-
-                    if (!Array.isArray(batchResponse.missingIndices)) {
-                        throw new Error('服务器返回了异常的缺失分片结果。');
-                    }
-                    pendingIndices = batchResponse.missingIndices;
-                }
+            if (uploadSession.alreadyUpToDate) {
+                updateProgress(100, '服务器已是同一份数据，无需重复上传。');
+                setActionButtonsDisabled(false);
+                return;
             }
+
+            const missingIndices = Array.isArray(uploadSession.missingIndices)
+                ? uploadSession.missingIndices
+                : chunks.map((chunk) => chunk.index);
+            const chunkMap = new Map(chunks.map((chunk) => [chunk.index, chunk]));
+            const chunksToUpload = missingIndices.map((index) => {
+                const chunk = chunkMap.get(index);
+                if (!chunk) throw new Error('本地数据不完整，请刷新页面后重试。');
+                return chunk;
+            });
+
+            if (chunksToUpload.length > 0) {
+                updateProgress(36, '正在上传服务器数据...');
+            } else {
+                updateProgress(88, '服务器已有部分数据，正在完成提交...');
+            }
+            const parts = await uploadParts(uploadSession, chunksToUpload);
 
             updateProgress(92, '正在完成服务器提交...');
             const commitResponse = await postSync({
-                action: 'push-commit',
-                sessionId
+                action: 'upload-complete',
+                sessionId,
+                uploadId: uploadSession.uploadId,
+                key: uploadSession.key,
+                checksum: snapshot.checksum,
+                recordCount: snapshot.recordCount,
+                chunkSize: CONFIG.chunkSize,
+                chunkCount: chunks.length,
+                totalBytes: uploadTotalBytes,
+                chunkManifest,
+                parts
             }, {
-                retryCount: CONFIG.commitRetryCount,
+                retryCount: 1,
                 timeoutMs: CONFIG.commitTimeoutMs
             });
 
-            markSynced('push', commitResponse.checksum || snapshot.checksum);
             updateProgress(100, '上传成功。');
             setActionButtonsDisabled(false);
         } catch (error) {
-            const message = error?.message || '本地同步失败。';
-            updateProgress(100, message);
+            if (uploadSession?.uploadId && uploadSession?.key) {
+                try {
+                    await postSync({
+                        action: 'upload-abort',
+                        uploadId: uploadSession.uploadId,
+                        key: uploadSession.key
+                    }, { retryCount: 0 });
+                } catch (abortError) {
+                    console.warn('[RP Sync] Failed to abort upload:', abortError);
+                }
+            }
+            updateProgress(100, error?.message || '本地同步失败。');
             setActionButtonsDisabled(false);
         } finally {
             state.syncing = false;
@@ -1330,19 +1189,16 @@
         wrapper.innerHTML = `
             <button type="button" class="rp-sync-button" aria-label="打开同步面板">
                 <span class="rp-sync-button__label">同步</span>
-                <span class="rp-sync-button__dot" hidden></span>
             </button>
         `;
 
         anchor.appendChild(wrapper);
         syncButton = wrapper.querySelector('.rp-sync-button');
-        syncDot = wrapper.querySelector('.rp-sync-button__dot');
         syncButton.addEventListener('click', () => {
             handleSyncButtonClick().catch(() => { });
         });
 
         state.mounted = true;
-        state.dirty = getMeta().dirty;
         updateButtonState();
     }
 
@@ -1357,22 +1213,13 @@
         mountSyncButton();
     }
 
-    patchDocumentWrite();
-    installIndexedDbHooks();
-    installLocalStorageHooks();
-
-    Promise.resolve()
-        .finally(async () => {
-            bootstrapResolved = true;
-            await maybeReleaseScripts().catch(() => { });
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', () => {
-                    ensureModal();
-                    watchProfileMount();
-                }, { once: true });
-            } else {
-                ensureModal();
-                watchProfileMount();
-            }
-        });
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            ensureModal();
+            watchProfileMount();
+        }, { once: true });
+    } else {
+        ensureModal();
+        watchProfileMount();
+    }
 })();
