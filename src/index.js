@@ -7,6 +7,7 @@ const MANIFEST_KEY = `${R2_PREFIX}/manifest.json`;
 const SNAPSHOT_PART_SIZE = 5 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 512 * 1024 * 1024;
 const MAX_CHUNK_COUNT = 2048;
+const MAX_PULL_CHUNKS = 8;
 const MAX_BATCH_CHUNKS = 1;
 
 const INJECTED_BOOTSTRAP = `
@@ -200,7 +201,7 @@ async function handlePullJsonPart(bucket, body) {
     const start = Number(body.start);
     const count = Number(body.count);
     if (!Number.isInteger(version) || version !== manifest.version) return error('Remote version changed. Please retry.', 409);
-    if (!Number.isInteger(start) || start < 0 || !Number.isInteger(count) || count !== 1) return error('Invalid pull range.');
+    if (!Number.isInteger(start) || start < 0 || !Number.isInteger(count) || count <= 0 || count > MAX_PULL_CHUNKS) return error('Invalid pull range.');
     if (start >= manifest.chunkCount || start + count > manifest.chunkCount) return error('Invalid pull range.');
 
     const firstChunk = manifest.chunkManifest[start];
